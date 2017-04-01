@@ -6,7 +6,7 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.HashPartitioner
 import scala.collection.mutable.ListBuffer
 
-import scala.math.log10
+import scala.math._
 
 object textSimilarity {
     def main(args: Array[String]): Unit = {
@@ -92,13 +92,9 @@ object textSimilarity {
         val resultRDD = invertedIndexRDD.map{
             x =>
                 val wordKey = x._1
-                var similarityResListBuffer = ListBuffer.empty[(String, (String, String, String, Double, Int, String, Double, Int, String, Double, Int))]
+                var similarityResListBuffer = ListBuffer.empty[(String, (String, Double, Int, String, Double, Int, String, Double, Int))]
                 val messageList = x._2.split('|').map{x => x.split("\t")}
 
-                var hitKeyword = ("", "")
-                if(obviousEvilWords.contains(wordKey)) {
-                    hitKeyword = (wordKey, obviousEvilWordsMap(wordKey))
-                }
                 val labeledRecord = messageList.filter(x => typeSet.contains(x(0)))
                     .map(x => (x(0), x(1), x(2), x(2).split(' ').toSet))
                 val unlabeledRecord = messageList.filter(x => !typeSet.contains(x(0)))
@@ -121,7 +117,8 @@ object textSimilarity {
                         }
                         numerator += sameCommonWords.size
                         denominator += allCommonWords.size
-                        val similarity = (numerator/denominator, samewords.size, seed._1)
+                        val sim = 1-pow(3, -((numerator/denominator)*log(samewords.size)))
+                        val similarity = (sim, samewords.size, seed._1)
                         simResListBuffer += similarity
                     }
                     val simResList = simResListBuffer.toList.sortWith(_._1>_._1)
@@ -137,13 +134,37 @@ object textSimilarity {
                     if(simResList.length>2) {
                         thirdMaxSim = simResList(2)
                     }
-                    val resTuple = (record._1 + "\t" + record._2 + "\t" + record._3, (hitKeyword._1, hitKeyword._2, maxSim._3, maxSim._1, maxSim._2, secondMaxSim._3, secondMaxSim._1, secondMaxSim._2, thirdMaxSim._3, thirdMaxSim._1, thirdMaxSim._2))
+                    val resTuple = (record._1 + "\t" + record._2 + "\t" + record._3, (maxSim._3, maxSim._1, maxSim._2, secondMaxSim._3, secondMaxSim._1, secondMaxSim._2, thirdMaxSim._3, thirdMaxSim._1, thirdMaxSim._2))
                     similarityResListBuffer += resTuple
                 }
                 similarityResListBuffer.toList
         }.flatMap(x => x).map{
             x =>
-            x._1 + "\t" + x._2._1 + "\t" + x._2._2 + "\t" + x._2._3 + "\t" + x._2._4 + "\t" + x._2._5 + "\t" + x._2._6 + "\t" + x._2._7 + "\t" + x._2._8 + "\t" + x._2._9 + "\t" + x._2._10 + "\t" + x._2._11
+                (x._1, List((x._2._1, x._2._2, x._2._3), (x._2._4, x._2._5, x._2._6), (x._2._7, x._2._8, x._2._9)))
+        }.reduceByKey((x, y) => x:::y).map{
+            x =>
+                val sortedRes = x._2.sortWith(_._2>_._2)
+                val maxSim = sortedRes.head
+                val secSim = sortedRes(1)
+                val thirdSim = sortedRes(2)
+                (x._1, maxSim, secSim, thirdSim)
+        }.map{
+            x =>
+                val record = x._1.split('\t')(2).split(' ').toSet
+                val samewords = obviousEvilWords.toSet & record
+                var hitkeyword = ("", "")
+                if(samewords.nonEmpty) {
+                    if(samewords.size == 1) {
+                        hitkeyword = (samewords.head, obviousEvilWordsMap(samewords.head))
+                    } else {
+                        for (word <- samewords){
+                            if(obviousEvilWordsMap(word) == x._2._1) {
+                                hitkeyword = (word, obviousEvilWordsMap(word))
+                            }
+                        }
+                    }
+                }
+                x._1 + "\t" + hitkeyword._1 + "\t" + hitkeyword._2 + "\t" + x._2._1.toString + "\t" + x._2._2.toString + "\t" + x._2._3 + "\t" + x._3._1.toString + "\t" + x._3._2.toString + "\t" + x._3._3 + "\t" + x._4._1.toString + "\t" + x._4._2.toString + "\t" + x._4._3
         }.distinct()
 
         //spark.sparkContext.parallelize(evilWordsWeightMap.toSeq).saveAsTextFile("/dws/credit/textsimilarity/words_tf_weight")
